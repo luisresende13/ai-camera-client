@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Camera API
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/home/luisresende_octacity/ai-camera-api
+ExecStart=/home/luisresende_octacity/ai-camera-api/venv/bin/gunicorn --workers 4 --threads 32 --timeout 0 --bind 0.0.0.0:5006  --access-logfile access.log --error-logfile error.log main:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
