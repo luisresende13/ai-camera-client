@@ -6,7 +6,7 @@ SCHEDULER_PROJECT_ID = os.environ.get('SCHEDULER_PROJECT_ID')
 SCHEDULER_LOCATION = os.environ.get('SCHEDULER_LOCATION')
 MONGO_API_URL = os.environ.get('MONGO_API_URL')
 CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL')
-AI_CAMERA_API_URL = os.environ.get('AI_CAMERA_API_URL')
+AI_CAMERA_MANAGER_API_URL = os.environ.get('AI_CAMERA_MANAGER_API_URL')
 
 app = Flask(__name__)
 
@@ -43,7 +43,7 @@ def create_config_and_job():
     
     # Custom attributes
     job_name = f"config-{config_id}"
-    job_url = f'{AI_CAMERA_API_URL}/process_stream_config?config_id={config_id}'
+    job_url = f'{AI_CAMERA_MANAGER_API_URL}/process_config/{config_id}'
 
     # If MongoDB operation succeeds, create a job in Cloud Scheduler
     job_data = {
