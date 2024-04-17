@@ -55,4 +55,3 @@ sudo tail -n 30 -f error.log
 
 # Configure Firewall Rules:
 # If you haven't already done so, configure firewall rules to allow traffic on the port your Flask app is running on (usually port 5000).
-

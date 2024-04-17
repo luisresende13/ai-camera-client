@@ -1,6 +1,7 @@
 import os
 import requests
 from flask import Flask, request, jsonify
+from falsk_cors import CORS
 
 SCHEDULER_PROJECT_ID = os.environ.get('SCHEDULER_PROJECT_ID')
 SCHEDULER_LOCATION = os.environ.get('SCHEDULER_LOCATION')
@@ -9,6 +10,7 @@ CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL')
 AI_CAMERA_MANAGER_API_URL = os.environ.get('AI_CAMERA_MANAGER_API_URL')
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/', methods=['GET'])
 def root():
@@ -23,7 +25,7 @@ def create_config_and_job():
     # Get attribute values from body
     user_id = body['user_id']
     camera_id = body['camera_id']
-    object_id = body['object_id']
+    class_id = body['class_id']
     job_schedule = body['schedule'] # example: "0 15 * * *"
     job_time_zone = body.get('time_zone', 'America/Sao_Paulo')
     
