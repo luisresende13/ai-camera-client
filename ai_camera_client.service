@@ -1,0 +1,18 @@
+[Unit]
+Description=AI Camera Client
+After=network.target
+
+[Service]
+User=root
+Group=root
+Environment="SCHEDULER_PROJECT_ID=octacity-413119"
+Environment="SCHEDULER_LOCATION=us-central1"
+Environment="MONGO_API_URL=http://0.0.0.0:5000"
+Environment="CLOUD_SCHEDULER_API_URL=http://0.0.0.0:5002"
+# Environment="AI_CAMERA_MANAGER_API_URL=http://35.225.244.90:5000"
+WorkingDirectory=/home/luis_octa_uff/ai-camera-client
+ExecStart=/home/luis_octa_uff/ai-camera-client/venv/bin/gunicorn --workers 4 --threads 32 --timeout 0 --bind 0.0.0.0:5010  --access-logfile access.log --error-logfile error.log main:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
