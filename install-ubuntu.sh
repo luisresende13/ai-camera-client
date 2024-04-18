@@ -45,6 +45,7 @@ pip install -r requirements.txt
 sudo cp ai_camera_client.service /etc/systemd/system/ai_camera_client.service
 sudo nano /etc/systemd/system/ai_camera_client.service
 # OBS: MUST FILL THE USER NAME IN THE SERVICE FILE. THE USER NAME IS USUALY THE PART OF THE GMAL BEFORE THE '@' AND REPLACING DOTS FOR HYPHENS.
+# TO FIND YOUR USER NAME. RUN: ls ../
 
 # Create a service file with the content of the "service.service" file present in the same directory as this file.
 # Replace your_username, your_group, /path/to/your_flask_app_directory, and /path/to/your_flask_app_file.py with appropriate values for your setup.

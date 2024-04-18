@@ -1,7 +1,7 @@
 import os
 import requests
 from flask import Flask, request, jsonify
-from falsk_cors import CORS
+from flask_cors import CORS
 
 SCHEDULER_PROJECT_ID = os.environ.get('SCHEDULER_PROJECT_ID')
 SCHEDULER_LOCATION = os.environ.get('SCHEDULER_LOCATION')
