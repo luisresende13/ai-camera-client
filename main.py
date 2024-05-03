@@ -4,20 +4,19 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+MONGO_API_URL = os.environ.get('MONGO_API_URL')
 SCHEDULER_PROJECT_ID = os.environ.get('SCHEDULER_PROJECT_ID')
 SCHEDULER_LOCATION = os.environ.get('SCHEDULER_LOCATION')
-MONGO_API_URL = os.environ.get('MONGO_API_URL')
 CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL')
+
 AI_CAMERA_MANAGER_API_URL = os.environ.get('AI_CAMERA_MANAGER_API_URL')
 PROCESS_STREAM_API_URL = os.environ.get('PROCESS_STREAM_API_URL')
-ZONEMINDER_API_URL = os.environ.get('ZONEMINDER_API_URL')
+
+ZONEMINDER_IP = os.environ.get('ZONEMINDER_IP')
 ZONEMINDER_USER_NAME = os.environ.get('ZONEMINDER_USER_NAME')
 ZONEMINDER_PASSWORD = os.environ.get('ZONEMINDER_PASSWORD')
 
-# PROCESS_STREAM_API_URL = 'http://localhost:5001'
-# ZONEMINDER_API_URL = f'http://localhost/zm/api'
-
-# Define the URL and data
+ZONEMINDER_API_URL = f'http://{ZONEMINDER_IP}/zm/api'
 zm_auth = {"user": ZONEMINDER_USER_NAME, "pass": ZONEMINDER_PASSWORD}
 
 def zm_login():
@@ -40,6 +39,17 @@ CORS(app)
 def root():
     return "AI Camera Client API"
 
+@app.route('/zm/login', methods=['GET'])
+def zm_login_endpoint():
+    zm_token = zm_login()
+    if zm_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to zoneminder", 'token': None}
+        print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
+        return jsonify(msg), 500
+    
+    msg = {'ok': True, 'detail': f"Login to zoneminder successful", 'token': zm_token}
+    return jsonify(msg)
+    
 # Endpoint to create a new configuration object in MongoDB and create a job in Cloud Scheduler
 @app.route("/cameras", methods=["POST"])
 def create_camera_and_monitor():
@@ -60,23 +70,23 @@ def create_camera_and_monitor():
         print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
         return jsonify(msg), 500
 
-    monitor_url = f'{protocol}://{address}:{port}/{subpath}'
+    camera_url = f'{protocol}://{address}:{port}/{subpath}'
     
     # Test the camera connection
     url = f'{PROCESS_STREAM_API_URL}/connect'
     connect = {
-        'url': monitor_url,
+        'url': camera_url,
         'thumbnail': True
     }
     res = requests.post(url, json=connect)
-    data = res.json()
+    connection = res.json()
 
     if not res.ok:
         msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to test the camera url connection using the Process Stream API"}
         print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
         return jsonify(msg), 500
 
-    connected = data['connected']
+    connected = connection['connected']
 
     if not connected:
         msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to connect to the camera url connection using the Process Stream API"}
@@ -84,11 +94,12 @@ def create_camera_and_monitor():
         return jsonify(msg), 500
 
     # Get camera connection status
-    width = data['width']
-    height = data['height']
-    fps = data['fps']
-    image = data['image']    
-    
+    message = connection['message']
+    width = connection['width']
+    height = connection['height']
+    fps = connection['fps']
+    image = connection['image']    
+
     # Make a request to MongoDB API to create a configuration object
     url = f'{MONGO_API_URL}/octacity/cameras'
 
@@ -96,13 +107,17 @@ def create_camera_and_monitor():
         'user_id': user_id,
         'name': name,
         'protocol': protocol,
-        'address': 'address',
+        'address': address,
         'port': port,
         'subpath': subpath,
         'connected': connected,
+        'message': message,
         'fps': fps,
         'width': width,
         'height': height,
+        'url': camera_url,
+        'monitor_id': None,
+        'zm_url': None,
     }
     
     res = requests.post(url, json=camera)
@@ -113,8 +128,8 @@ def create_camera_and_monitor():
         return jsonify(msg), 500
 
     # Get the created camera object
-    data = res.json()
-    camera = data['data']
+    created = res.json()
+    camera = created['data']
     camera_id = camera['_id']
 
     # Define monitor data
@@ -130,7 +145,7 @@ def create_camera_and_monitor():
         monitor_protocol = None
         monitor_host = None
         monitor_port = ''
-        monitor_path = monitor_url
+        monitor_path = camera_url
     
     else:
         monitor_type = 'Remote'
@@ -142,7 +157,7 @@ def create_camera_and_monitor():
     
     url = f'{ZONEMINDER_API_URL}/monitors.json?token={zm_token}'
     
-    data = {
+    monitor = {
         'Name': monitor_name,
         'Function': monitor_function,
         'Method': monitor_method,
@@ -157,17 +172,259 @@ def create_camera_and_monitor():
         # 'User': None,
         # 'Pass': None,
     }
-    data = {f'Monitor[{key}]': value for key, value in data.items()}
+    monitor = {f'Monitor[{key}]': value for key, value in monitor.items()}
     
-    res = requests.post(url, data=data)
+    res = requests.post(url, data=monitor)
 
     if not res.ok:
         msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to create monitor in zoneminder"}
         print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
         return jsonify(msg), 500
 
-    msg = {'camera_id': camera_id, 'ok': True, 'data': camera, 'detail': "Configuration object created and job created successfully"}
+    # Get created monitor from zoneminder
+    url = f'{ZONEMINDER_API_URL}/monitors/index/Name:{monitor_name}.json?token={zm_token}'
+    res = requests.get(url)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get monitor from zoneminder"}
+        print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    monitors = res.json()
+    monitor = monitors['monitors'][0]['Monitor']
+    monitor_id = monitor['Id']
+    zm_url = f'http://{ZONEMINDER_IP}/zm/cgi-bin/nph-zms?monitor={monitor_id}&width={width}px&height={height}px&maxfps={fps}&buffer=1000&scale=100&mode=jpeg'
+
+    # Update camera object with monitor id
+    url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
+
+    update = {
+        'monitor_id': monitor_id,
+        'zm_url': zm_url,
+    }
+    
+    res = requests.put(url, json=update)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to update camera object with monitor id in mongo collection'}
+        print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created camera object
+    updated = res.json()
+    camera_update = updated['data']
+    camera = {**camera, **camera_update}
+    
+    msg = {'camera_id': camera_id, 'ok': True, 'data': camera, 'detail': "Camera object monitor created successfully"}
     print(f'POST REQUEST TO CREATE CAMERA FINISHED | {msg}')
+    return jsonify(msg), 201
+
+
+# Endpoint to create a new configuration object in MongoDB and create a job in Cloud Scheduler
+@app.route("/cameras/<camera_id>", methods=["PUT"])
+def update_camera_and_monitor(camera_id):
+    # Get body from the request
+    body = request.json
+
+    # Return if not allowed field is found
+    for key in body.keys():
+        if key not in ['name', 'protocol', 'address', 'port', 'subpath']:
+            msg = {'ok': False, 'detail': f'Field not allowed: {key} = {body[key]}'}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 400
+
+    if body.get('port') is not None:
+        body['port'] = int(body['port'])
+
+    update_connection = not list(body.keys()) == ['name']
+
+    if update_connection:
+
+        # Make a request to MongoDB API to get a camera object
+        url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
+        res = requests.get(url)
+    
+        if not res.ok:
+            msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get camera object from mongo collection'}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 500
+
+        camera = res.json()
+
+        zm_token = zm_login()
+        if zm_token is None:
+            msg = {'ok': False, 'detail': f"Failed to login to zoneminder"}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 500
+
+        monitor_name = camera_id
+        url = f'{ZONEMINDER_API_URL}/monitors/index/Name:{monitor_name}.json?token={zm_token}'
+        res = requests.get(url)
+        
+        if not res.ok:
+            msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get monitor from zoneminder"}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 500
+
+        monitors = res.json()
+        monitor = monitors['monitors'][0]['Monitor']
+        monitor_id = monitor['Id']
+        
+        protocol = body.get('protocol', camera['protocol'])
+        address = body.get('address', camera['address'])
+        port = body.get('port', camera['port'])
+        subpath = body.get('subpath', camera['subpath'])
+
+        camera_url = f'{protocol}://{address}:{port}/{subpath}'
+            
+        # Test the camera connection
+        url = f'{PROCESS_STREAM_API_URL}/connect'
+        connect = {
+            'url': camera_url,
+            'thumbnail': True
+        }
+        res = requests.post(url, json=connect)
+    
+        if not res.ok:
+            msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to test the camera url connection using the Process Stream API"}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 500
+    
+        connection = res.json()
+    
+        if not connection['connected']:
+            msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to connect to the camera url connection using the Process Stream API"}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 500
+
+        del connection['image']
+        width = connection['width'] 
+        height = connection['height']
+        fps = connection['fps']
+
+        zm_url = f'http://{ZONEMINDER_IP}/zm/cgi-bin/nph-zms?monitor={monitor_id}&width={width}px&height={height}px&maxfps={fps}&buffer=1000&scale=100&mode=jpeg'
+
+        body = {**body, **connection, 'zm_url': zm_url}
+        # camera_updated = {**camera, **body, **connection}
+        
+        # Define monitor data
+        monitor_width = width
+        monitor_height = height
+        
+        if protocol == 'rtsp':
+            monitor_type = 'Ffmpeg'
+            monitor_method = 'rtpRtsp'
+            monitor_protocol = None
+            monitor_host = None
+            monitor_port = ''
+            monitor_path = camera_url
+        
+        else:
+            monitor_type = 'Remote'
+            monitor_method = 'simple'
+            monitor_protocol = protocol
+            monitor_host = address
+            monitor_port = port
+            monitor_path = f'/{subpath}'
+    
+        url = f"{ZONEMINDER_API_URL}/monitors/{monitor_id}.json?token={zm_token}"
+    
+        monitor_update = {
+            'Type': monitor_type,
+            'Method': monitor_method,
+            'Protocol': monitor_protocol,
+            'Host': monitor_host,
+            'Port': monitor_port,
+            'Path': monitor_path,
+            'Width': monitor_width,
+            'Height': monitor_height,
+            # Fields ignored
+            # 'Name': monitor_name,
+            # 'Function': monitor_function,
+            # 'Colours': monitor_colours,
+            # 'User': None,
+            # 'Pass': None,
+        }
+        
+        monitor_update = {f'Monitor[{key}]': value for key, value in monitor_update.items()}
+        
+        res = requests.post(url, data=monitor_update)
+    
+        if not res.ok:
+            msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to update monitor in zoneminder"}
+            print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+            return jsonify(msg), 500
+
+    # Make a request to MongoDB API to create a configuration object
+    url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
+
+    res = requests.put(url, json=body)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to update camera object in mongo collection'}
+        print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created camera object
+    updated = res.json()
+    camera_update = updated['data'] # should return the same value as `body` by now
+    
+    msg = {'camera_id': camera_id, 'ok': True, 'data': camera_update, 'detail': "Camera object updated and monitor updated successfully"}
+    print(f'PUT REQUEST TO UPDATE CAMERA FINISHED | {msg}')
+    return jsonify(msg), 200
+
+# Endpoint to create a new configuration object in MongoDB and create a job in Cloud Scheduler
+@app.route("/cameras/<camera_id>", methods=["DELETE"])
+def delete_camera_and_monitor(camera_id):
+
+    zm_token = zm_login()
+    if zm_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to zoneminder"}
+        print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    monitor_name = camera_id
+    url = f'{ZONEMINDER_API_URL}/monitors/index/Name:{monitor_name}.json?token={zm_token}'
+    res = requests.get(url)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get monitor from zoneminder"}
+        print(f'ERROR IN DELETE REQUEST TO DELETE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    monitors = res.json()
+
+    monitor_deleted = {'ok': False, 'status': 'failed', 'statustext': 'Monitor not found in zoneminder'}
+    if len(monitors['monitors']):
+        monitor = monitors['monitors'][0]['Monitor']
+        monitor_id = monitor['Id']
+
+        url = f'{ZONEMINDER_API_URL}/monitors/{monitor_id}.json?token={zm_token}'
+        res = requests.delete(url)
+    
+        if not res.ok or not res.json()['status'] == 'ok':
+            msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete monitor from zoneminder"}
+            print(f'ERROR IN DELETE REQUEST TO DELETE CAMERA | {msg}')
+            return jsonify(msg), 500
+    
+        monitor_deleted = res.json()
+
+    # Make a request to MongoDB API to delete a camera object
+    url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
+    res = requests.delete(url)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to delete camera object from mongo collection'}
+        print(f'ERROR IN DELETE REQUEST TO DELETE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    camera_deleted = res.json()
+    camera_id = camera_deleted['deleted_record_id']
+            
+    data = {'camera_deleted': camera_deleted, 'monitor_deleted': monitor_deleted}
+    
+    msg = {'camera_id': camera_id, 'ok': True, 'data': data, 'detail': "Camera object and monitor deleted successfully"}
+    print(f'DELETE REQUEST TO DELETE CAMERA FINISHED | {msg}')
     return jsonify(msg), 200
 
 
@@ -199,14 +456,14 @@ def create_config_and_job():
     config_id = config['_id']
     
     # Custom attributes
-    job_name = f"config-{config_id}"
+    name = f"config-{config_id}"
     job_url = f'{AI_CAMERA_MANAGER_API_URL}/process_config/{config_id}'
 
     # If MongoDB operation succeeds, create a job in Cloud Scheduler
     job_data = {
         "project_id": SCHEDULER_PROJECT_ID,
         "location": SCHEDULER_LOCATION,
-        "job_name": job_name,
+        "name": name,
         "schedule": job_schedule,  # Every day at 15:00 UTC
         "time_zone": job_time_zone,
         "url": job_url,
@@ -226,7 +483,7 @@ def create_config_and_job():
 
     msg = {'config_id': config_id, 'ok': True, 'data': config, 'detail': "Configuration object created and job created successfully"}
     print(f'POST REQUEST TO CREATE CONFIG FINISHED | {msg}')
-    return jsonify(msg), 200
+    return jsonify(msg), 201
 
 @app.route("/config/<string:config_id>", methods=["PUT"])
 def update_config_and_job(config_id):
@@ -243,10 +500,11 @@ def update_config_and_job(config_id):
         return jsonify(msg), 500
 
     # Update the corresponding job in Cloud Scheduler
+    name = f"config-{config_id}"
     data = {
         "project_id": SCHEDULER_PROJECT_ID,
         "location": SCHEDULER_LOCATION,
-        "job_name": f"config-{config_id}",
+        "name": name,
         "updates": body  # Pass any updates for the job
     }
     url = f"{CLOUD_SCHEDULER_API_URL}/job/update"
@@ -274,12 +532,12 @@ def delete_config_and_job(config_id):
 
     # Delete the corresponding job from Cloud Scheduler
     # Delete the job from Cloud Scheduler
-    job_name = f"config-{config_id}"
+    name = f"config-{config_id}"
     scheduler_url = f"{CLOUD_SCHEDULER_API_URL}/job/delete"
-    data = {"project_id": SCHEDULER_PROJECT_ID, "location": SCHEDULER_LOCATION, "job_name": job_name}
+    data = {"project_id": SCHEDULER_PROJECT_ID, "location": SCHEDULER_LOCATION, "name": name}
     res = requests.post(scheduler_url, json=data)
     
-    if not res.ok:
+    if not res.ok and res.status_code != 404:
         msg = {'config_id': config_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete job from Cloud Scheduler"}
         print(f'ERROR IN DELETE REQUEST TO DELETE CONFIG JOB | {msg}')
         return jsonify(msg), 500
