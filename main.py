@@ -4,17 +4,24 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-MONGO_API_URL = os.environ.get('MONGO_API_URL')
-SCHEDULER_PROJECT_ID = os.environ.get('SCHEDULER_PROJECT_ID')
-SCHEDULER_LOCATION = os.environ.get('SCHEDULER_LOCATION')
-CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL')
+MONGO_API_URL = os.environ['MONGO_API_URL']
+SCHEDULER_PROJECT_ID = os.environ['SCHEDULER_PROJECT_ID']
+SCHEDULER_LOCATION = os.environ['SCHEDULER_LOCATION']
+CLOUD_SCHEDULER_API_URL = os.environ['CLOUD_SCHEDULER_API_URL']
 
-AI_CAMERA_MANAGER_API_URL = os.environ.get('AI_CAMERA_MANAGER_API_URL')
-PROCESS_STREAM_API_URL = os.environ.get('PROCESS_STREAM_API_URL')
+AI_CAMERA_MANAGER_API_URL = os.environ['AI_CAMERA_MANAGER_API_URL']
+PROCESS_STREAM_API_URL = os.environ['PROCESS_STREAM_API_URL']
 
-ZONEMINDER_IP = os.environ.get('ZONEMINDER_IP')
-ZONEMINDER_USER_NAME = os.environ.get('ZONEMINDER_USER_NAME')
-ZONEMINDER_PASSWORD = os.environ.get('ZONEMINDER_PASSWORD')
+ZONEMINDER_IP = os.environ['ZONEMINDER_IP']
+ZONEMINDER_USER_NAME = os.environ['ZONEMINDER_USER_NAME']
+ZONEMINDER_PASSWORD = os.environ['ZONEMINDER_PASSWORD']
+
+AI_CAMERA_MANAGER_API_URL = 'http://localhost:5020'
+PROCESS_STREAM_API_URL = 'http://localhost:5021'
+
+# ZONEMINDER_IP = '34.72.85.235'
+# ZONEMINDER_USER_NAME = 'admin'
+# ZONEMINDER_PASSWORD = 'octa2023'
 
 ZONEMINDER_API_URL = f'http://{ZONEMINDER_IP}/zm/api'
 zm_auth = {"user": ZONEMINDER_USER_NAME, "pass": ZONEMINDER_PASSWORD}
@@ -439,11 +446,13 @@ def create_config_and_job():
     camera_id = body['camera_id']
     class_id = body['class_id']
     job_schedule = body['schedule'] # example: "0 15 * * *"
-    job_time_zone = body.get('time_zone', 'America/Sao_Paulo')
+    time_zone = body.get('time_zone', 'America/Sao_Paulo')
+    start_time = body.get('start_time', '00:00:00')
+    end_time = body.get('end_time', '23:59:59')
     
     # Make a request to MongoDB API to create a configuration object
     url = f"{MONGO_API_URL}/octacity/configs"
-    res = requests.post(url, json=body)
+    res = requests.post(url, json={**body, 'time_zone': time_zone, 'start_time': start_time, 'end_time': end_time})
     
     if not res.ok:
         msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to create configuration object in mongo collection"}
@@ -465,7 +474,7 @@ def create_config_and_job():
         "location": SCHEDULER_LOCATION,
         "name": name,
         "schedule": job_schedule,  # Every day at 15:00 UTC
-        "time_zone": job_time_zone,
+        "time_zone": time_zone,
         "url": job_url,
         "method": 'GET',
         "headers": {"Content-Type": "application/json"}
