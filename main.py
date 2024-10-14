@@ -62,8 +62,41 @@ def zm_login_endpoint():
     
     msg = {'ok': True, 'detail': f"Login to zoneminder successful", 'token': zm_token}
     return jsonify(msg)
+
+# Create user
+@app.route("/user", methods=["POST"])
+def create_user():
+    # Get body from the request
+    body = request.json
+
+    # Login to MongoDB API
+    mongo_token = mongodb_login()
+    if mongo_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
+        print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    url = f'{MONGO_API_URL}/octacity/users'
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    user = {**body,}
     
-# Endpoint to create a new configuration object in MongoDB and create a job in Cloud Scheduler
+    res = requests.post(url, headers=headers, json=user)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to create user object in mongo collection'}
+        print(f'ERROR IN POST REQUEST TO CREATE USER | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created camera object
+    created = res.json()
+    user = created['data']
+    user_id = user['_id']
+
+    msg = {'user_id': user_id, 'ok': True, 'data': user, 'detail': "User object created successfully"}
+    print(f'POST REQUEST TO CREATE USER FINISHED | {msg}')
+    return jsonify(msg), 201
+
+# Endpoint to create a new camera object in MongoDB
 @app.route("/cameras", methods=["POST"])
 def create_camera_and_monitor():
     # Get body from the request
@@ -182,8 +215,6 @@ def create_camera_and_monitor():
             monitor_port = port
             monitor_path = f'/{subpath}'
         
-        url = f'{ZONEMINDER_API_URL}/monitors.json?token={zm_token}'
-        
         monitor = {
             'Name': monitor_name,
             'Function': monitor_function,
@@ -199,8 +230,10 @@ def create_camera_and_monitor():
             # 'User': None,
             # 'Pass': None,
         }
-        monitor = {f'Monitor[{key}]': value for key, value in monitor.items()}
         
+        url = f'{ZONEMINDER_API_URL}/monitors.json?token={zm_token}'
+        monitor = {f'Monitor[{key}]': value for key, value in monitor.items()}
+                
         res = requests.post(url, data=monitor)
     
         if not res.ok:
@@ -252,7 +285,11 @@ def create_camera_and_monitor():
 def update_camera_and_monitor(camera_id):
     # Get body from the request
     body = request.json
+    update_monitor = body.get('update_monitor', 'false') == 'true'
 
+    if 'update_monitor' in body:
+        del body['update_monitor']
+        
     # Return if not allowed field is found
     for key in body.keys():
         if key not in ['name', 'protocol', 'address', 'port', 'subpath']:
@@ -267,6 +304,7 @@ def update_camera_and_monitor(camera_id):
 
     # Login to MongoDB API
     mongo_token = mongodb_login()
+
     if mongo_token is None:
         msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
         print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
@@ -286,7 +324,7 @@ def update_camera_and_monitor(camera_id):
 
         camera = res.json()
 
-        if camera['monitor_id']:
+        if update_monitor and camera['monitor_id']:
             zm_token = zm_login()
             if zm_token is None:
                 msg = {'ok': False, 'detail': f"Failed to login to zoneminder"}
@@ -341,7 +379,7 @@ def update_camera_and_monitor(camera_id):
         # Include the new connection in the update object
         body = {**body, **connection}
         
-        if camera['monitor_id']:
+        if update_monitor and camera['monitor_id']:
             zm_url = f'http://{ZONEMINDER_IP}/zm/cgi-bin/nph-zms?monitor={monitor_id}&width={width}px&height={height}px&maxfps={fps}&buffer=1000&scale=100&mode=jpeg'
     
             # Include the new zm monitor url in the update object
