@@ -92,6 +92,54 @@ def create_user():
     user = created['data']
     user_id = user['_id']
 
+    # Get base classes
+    url = f'{MONGO_API_URL}/octacity/classes-base'
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get base classes from mongo collection'}
+        print(f'ERROR IN POST REQUEST TO CREATE USER | {msg}')
+        return jsonify(msg), 500
+
+    classes_base = res.json()
+
+    # # Get base settings
+    # url = f'{MONGO_API_URL}/octacity/settings-base'
+    # headers = {'Authorization': f'Bearer {mongo_token}'}
+    # res = requests.get(url, headers=headers)
+
+    # if not res.ok:
+    #     msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get base settings from mongo collection'}
+    #     print(f'ERROR IN POST REQUEST TO CREATE USER | {msg}')
+    #     return jsonify(msg), 500
+
+    # settings_base = res.json()[0]
+
+    # Create user classes
+    url = f'{MONGO_API_URL}/octacity/classes'
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    
+    data = [{'user_id': user_id, **obj} for obj in classes_base]
+    res = requests.post(url, headers=headers, json=data)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to post user classes to mongo collection'}
+        print(f'ERROR IN POST REQUEST TO CREATE USER | {msg}')
+        return jsonify(msg), 500
+
+    # # Create user settings
+    # url = f'{MONGO_API_URL}/octacity/settings'
+    # headers = {'Authorization': f'Bearer {mongo_token}'}
+    
+    # data = {'user_id': user_id, **settings_base}
+    # res = requests.post(url, headers=headers, json=data)
+    
+    # if not res.ok:
+    #     msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to post user settings to mongo collection'}
+    #     print(f'ERROR IN POST REQUEST TO CREATE USER | {msg}')
+    #     return jsonify(msg), 500
+    
     msg = {'user_id': user_id, 'ok': True, 'data': user, 'detail': "User object created successfully"}
     print(f'POST REQUEST TO CREATE USER FINISHED | {msg}')
     return jsonify(msg), 201
