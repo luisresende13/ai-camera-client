@@ -4,15 +4,13 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-MONGO_API_URL = os.environ['MONGO_API_URL']
-mongo_auth = {'email': 'luisresende13@gmail.com', 'password': 'Gaia0333'}
+MONGO_API_URL = os.environ.get('MONGO_API_URL', 'http://localhost:5000')
+CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL', 'http://localhost:5001')
+AI_CAMERA_MANAGER_API_URL = os.environ.get('AI_CAMERA_MANAGER_API_URL', 'http://localhost:5004')
+CAMERA_VISION_AI_API_URL = os.environ.get('CAMERA_VISION_AI_API_URL', 'http://localhost:5005')
 
 SCHEDULER_PROJECT_ID = os.environ['SCHEDULER_PROJECT_ID']
-SCHEDULER_LOCATION = os.environ['SCHEDULER_LOCATION']
-CLOUD_SCHEDULER_API_URL = os.environ['CLOUD_SCHEDULER_API_URL']
-
-AI_CAMERA_MANAGER_API_URL = os.environ['AI_CAMERA_MANAGER_API_URL']
-PROCESS_STREAM_API_URL = os.environ['PROCESS_STREAM_API_URL']
+SCHEDULER_LOCATION = os.environ.get('SCHEDULER_LOCATION', 'us-central-1')
 
 ZONEMINDER_IP = os.environ['ZONEMINDER_IP']
 ZONEMINDER_USER_NAME = os.environ['ZONEMINDER_USER_NAME']
@@ -20,6 +18,8 @@ ZONEMINDER_PASSWORD = os.environ['ZONEMINDER_PASSWORD']
 
 ZONEMINDER_API_URL = f'http://{ZONEMINDER_IP}/zm/api'
 zm_auth = {"user": ZONEMINDER_USER_NAME, "pass": ZONEMINDER_PASSWORD}
+
+mongo_auth = {'email': 'luisresende13@gmail.com', 'password': 'Gaia0333'}
 
 def zm_login():
     # Send the POST request
@@ -130,7 +130,7 @@ def create_camera_and_monitor():
     camera_url = f'{protocol}://{address}:{port}/{subpath}'
     
     # Test the camera connection
-    url = f'{PROCESS_STREAM_API_URL}/connect'
+    url = f'{CAMERA_VISION_AI_API_URL}/connect'
     connect = {
         'url': camera_url,
         'thumbnail': True
@@ -352,7 +352,7 @@ def update_camera_and_monitor(camera_id):
         camera_url = f'{protocol}://{address}:{port}/{subpath}'
             
         # Test the camera connection
-        url = f'{PROCESS_STREAM_API_URL}/connect'
+        url = f'{CAMERA_VISION_AI_API_URL}/connect'
         connect = {
             'url': camera_url,
             'thumbnail': True
