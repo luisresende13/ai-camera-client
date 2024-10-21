@@ -1,5 +1,6 @@
 import time; start_time = time.time()
 import os
+import traceback
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -745,6 +746,140 @@ def delete_config_and_job(config_id):
     msg = {'config_id': config_id, 'ok': True, 'detail': "Configuration object deleted and job deleted successfully"}
     print(f'DELETE REQUEST TO DELETE CONFIG FINISHED | {msg}')
     return jsonify(msg), 200
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+
+# Function that will be called in parallel for each dict
+def call_post_config(item):
+    with app.test_request_context(json=item):
+        response = create_config_and_job()
+        
+        # Flask responses can return a tuple (response, status_code, headers), so handle this correctly
+        if isinstance(response, tuple):
+            response_data, status_code = response[0], response[1]  # Unpack response tuple
+        else:
+            response_data = response
+
+        # Convert response data to a JSON object if needed
+        return response_data.get_json() if hasattr(response_data, 'get_json') else response_data
+
+# Endpoint to receive list of dicts and process them in parallel
+@app.route('/configs', methods=['POST'])
+def post_config_parallel():
+    data = request.get_json()  # Expecting a list of dicts
+    max_workers = None  # Number of parallel workers (threads)
+    
+    # Ensure data is a list of dicts
+    # if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+    #     return jsonify({"error": "Invalid input format. Expected a list of dictionaries."}), 400
+
+    # Use ThreadPoolExecutor to process each item in parallel
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit each item for parallel processing
+        futures = {executor.submit(call_post_config, item): item for item in data}
+        
+        # Collect results as they complete
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                results.append({"error": traceback.format_exc()})
+
+    return jsonify(results)
+
+# Function that will be called in parallel for each dict
+def call_post_config_parallel(items):
+    with app.test_request_context(json=items):
+        response = post_config_parallel()
+        
+        # Flask responses can return a tuple (response, status_code, headers), so handle this correctly
+        if isinstance(response, tuple):
+            response_data, status_code = response[0], response[1]  # Unpack response tuple
+        else:
+            response_data = response
+
+        # Convert response data to a JSON object if needed
+        return response_data.get_json() if hasattr(response_data, 'get_json') else response_data
+
+
+@app.route('/profile', methods=['POST'])
+def post_profile():
+    # data = request.get_json()  # Expecting a list of dicts
+
+    # Get body from the request
+    body = request.json
+
+    # Get attribute values from body
+    user_id = body['user_id'] 
+    camera_ids = body['camera_ids']
+    class_id = body['class_id']
+    schedule = body['schedule'] # example: "0 15 * * *"
+    time_zone = body.get('time_zone', 'America/Sao_Paulo')
+    start_time = body.get('start_time', '00:00:00')
+    end_time = body.get('end_time', '23:59:59')
+
+    # Login to MongoDB API
+    mongo_token = mongodb_login()
+    if mongo_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
+        print(f'ERROR IN LOGGING INTO MONGO API | {msg}')
+        return jsonify(msg), 500
+
+    # # Make a request to MongoDB API to get the camera object
+    # url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
+    # headers = {'Authorization': f'Bearer {mongo_token}'}
+    # res = requests.get(url, headers=headers)
+
+    # if not res.ok:
+    #     msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get camera object from mongo collection'}
+    #     print(f'ERROR IN POST REQUEST TO GET CAMERA OBJECT FROM MONGO | {msg}')
+    #     return jsonify(msg), 500
+
+    # camera = res.json()
+
+    # # Add user_id to the body so to include it in the config object for convenience access
+    # user_id = camera['user_id']
+    # body['user_id'] = user_id
+    
+    # Make a request to MongoDB API to create a configuration object
+    url = f"{MONGO_API_URL}/octacity/profiles"
+    profile_body = {
+        **body,
+        'time_zone': time_zone,
+        'start_time': start_time,
+        'end_time': end_time
+    }
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.post(url, json=profile_body, headers=headers)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to create profile object in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO CREATE PROFILE | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created config object
+    data = res.json()
+    profile = data['data']
+    profile_id = profile['_id']
+
+    # Create multiple configs in parallel
+    del body['camera_ids']
+    items = [{**body, 'camera_id': _id} for _id in camera_ids]
+    configs_data = call_post_config_parallel(items)
+
+    success = all([obj['ok'] for obj in configs_data])
+    if not success:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': configs_data, 'detail': f"Failed to create multiple config objects in parallel in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO CREATE PROFILE | {msg}')
+        return jsonify(msg), 500
+    
+    msg = {'profile_id': profile_id, 'ok': True, 'data': profile, 'configs_data': configs_data, 'detail': "Profile object created successfully"}
+    print(f'POST REQUEST TO CREATE PROFILE FINISHED | {msg}')
+    return jsonify(msg), 201
+
 
 app_load_time = round(time.time() - start_time, 3)
 print(f'\nFLASK APPLICATION STARTED... | APP-LOAD-TIME: {app_load_time} s')
