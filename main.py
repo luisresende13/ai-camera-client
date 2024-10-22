@@ -2,8 +2,10 @@ import time; start_time = time.time()
 import os
 import traceback
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
 
 MONGO_API_URL = os.environ.get('MONGO_API_URL', 'http://localhost:5000')
 CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL', 'http://localhost:5001')
@@ -747,9 +749,6 @@ def delete_config_and_job(config_id):
     print(f'DELETE REQUEST TO DELETE CONFIG FINISHED | {msg}')
     return jsonify(msg), 200
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
-
 # Function that will be called in parallel for each dict
 def call_post_config(item):
     with app.test_request_context(json=item):
@@ -758,6 +757,22 @@ def call_post_config(item):
         # Flask responses can return a tuple (response, status_code, headers), so handle this correctly
         if isinstance(response, tuple):
             response_data, status_code = response[0], response[1]  # Unpack response tuple
+        else:
+            response_data = response
+
+        # Convert response data to a JSON object if needed
+        return response_data.get_json() if hasattr(response_data, 'get_json') else response_data
+
+# Function that will be called in parallel for each config_id to delete the config
+def call_delete_config(config_id):
+    with app.test_request_context():
+        # Manually set the path to the DELETE endpoint
+        with app.test_client() as client:
+            response = client.delete(f'/config/{config_id}')
+
+        # Flask responses can return a tuple (response, status_code, headers), so handle this correctly
+        if isinstance(response, tuple):
+            response_data, status_code = response[0], response[1]
         else:
             response_data = response
 
@@ -790,6 +805,32 @@ def post_config_parallel():
 
     return jsonify(results)
 
+# Endpoint to receive a list of config IDs and delete them in parallel
+@app.route('/configs/delete', methods=['POST'])
+def delete_config_parallel():
+    data = request.get_json()  # Expecting a list of config IDs
+    max_workers = None  # Number of parallel workers (threads)
+    
+    # Ensure data is a list of strings (config IDs)
+    if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+        return jsonify({"error": "Invalid input format. Expected a list of config IDs (strings)."}), 400
+
+    # Use ThreadPoolExecutor to delete each config in parallel
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit each config_id for parallel deletion
+        futures = {executor.submit(call_delete_config, config_id): config_id for config_id in data}
+        
+        # Collect results as they complete
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                results.append({"error": traceback.format_exc()})
+
+    return jsonify(results)
+
 # Function that will be called in parallel for each dict
 def call_post_config_parallel(items):
     with app.test_request_context(json=items):
@@ -804,6 +845,19 @@ def call_post_config_parallel(items):
         # Convert response data to a JSON object if needed
         return response_data.get_json() if hasattr(response_data, 'get_json') else response_data
 
+# Function that will be called in parallel for each list of config IDs
+def call_delete_config_parallel(config_ids):
+    with app.test_request_context(json=config_ids):
+        response = delete_config_parallel()
+        
+        # Flask responses can return a tuple (response, status_code, headers), so handle this correctly
+        if isinstance(response, tuple):
+            response_data, status_code = response[0], response[1]  # Unpack response tuple
+        else:
+            response_data = response
+
+        # Convert response data to a JSON object if needed
+        return response_data.get_json() if hasattr(response_data, 'get_json') else response_data
 
 @app.route('/profile', methods=['POST'])
 def post_profile():
@@ -828,21 +882,20 @@ def post_profile():
         print(f'ERROR IN LOGGING INTO MONGO API | {msg}')
         return jsonify(msg), 500
 
-    # # Make a request to MongoDB API to get the camera object
-    # url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
-    # headers = {'Authorization': f'Bearer {mongo_token}'}
-    # res = requests.get(url, headers=headers)
+    # Create multiple configs in parallel
+    del body['camera_ids']
+    items = [{**body, 'camera_id': _id} for _id in camera_ids]
+    body['camera_ids'] = camera_ids
+    configs_data = call_post_config_parallel(items)
 
-    # if not res.ok:
-    #     msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get camera object from mongo collection'}
-    #     print(f'ERROR IN POST REQUEST TO GET CAMERA OBJECT FROM MONGO | {msg}')
-    #     return jsonify(msg), 500
+    success = all([obj['ok'] for obj in configs_data])
+    if not success:
+        msg = {'ok': False, 'response': configs_data, 'detail': f"Failed to create multiple config objects in parallel in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO CREATE PROFILE | {msg}')
+        return jsonify(msg), 500
 
-    # camera = res.json()
-
-    # # Add user_id to the body so to include it in the config object for convenience access
-    # user_id = camera['user_id']
-    # body['user_id'] = user_id
+    config_ids = [obj['data']['_id'] for obj in configs_data]
+    state = 'resumed'
     
     # Make a request to MongoDB API to create a configuration object
     url = f"{MONGO_API_URL}/octacity/profiles"
@@ -850,7 +903,9 @@ def post_profile():
         **body,
         'time_zone': time_zone,
         'start_time': start_time,
-        'end_time': end_time
+        'end_time': end_time,
+        'config_ids': config_ids,
+        'state': state
     }
     headers = {'Authorization': f'Bearer {mongo_token}'}
     res = requests.post(url, json=profile_body, headers=headers)
@@ -865,20 +920,120 @@ def post_profile():
     profile = data['data']
     profile_id = profile['_id']
 
-    # Create multiple configs in parallel
-    del body['camera_ids']
-    items = [{**body, 'camera_id': _id} for _id in camera_ids]
-    configs_data = call_post_config_parallel(items)
-
-    success = all([obj['ok'] for obj in configs_data])
-    if not success:
-        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': configs_data, 'detail': f"Failed to create multiple config objects in parallel in mongo collection"}
-        print(f'ERROR IN POST REQUEST TO CREATE PROFILE | {msg}')
-        return jsonify(msg), 500
-    
     msg = {'profile_id': profile_id, 'ok': True, 'data': profile, 'configs_data': configs_data, 'detail': "Profile object created successfully"}
     print(f'POST REQUEST TO CREATE PROFILE FINISHED | {msg}')
     return jsonify(msg), 201
+
+
+@app.route('/profile/<string:profile_id>', methods=['DELETE'])
+def delete_profile(profile_id):
+
+    # Login to MongoDB API
+    mongo_token = mongodb_login()
+    if mongo_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
+        print(f'ERROR IN LOGGING INTO MONGO API | {msg}')
+        return jsonify(msg), 500
+
+    # Make a request to MongoDB API to create a configuration object
+    url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get profile object from mongo collection"}
+        print(f'ERROR IN POST REQUEST TO DELETE PROFILE | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created config object
+    profile = res.json()
+
+    # Create multiple configs in parallel
+    delete_configs_data = call_delete_config_parallel(profile['config_ids'])
+
+    success = all([obj['ok'] for obj in delete_configs_data])
+    if not success:
+        msg = {'ok': False, 'response': delete_configs_data, 'detail': f"Failed to delete multiple config objects in parallel in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO DELETE PROFILE | {msg}')
+        return jsonify(msg), 500
+
+    # Delete the configuration object from MongoDB
+    mongo_url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.delete(mongo_url, headers=headers)
+    
+    if not res.ok:
+        msg = {'profile_id': profile_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete profile object from MongoDB"}
+        print(f'ERROR IN DELETE REQUEST TO DELETE PROFILE | {msg}')
+        return jsonify(msg), 500
+    
+    msg = {'profile_id': profile_id, 'ok': True, 'data': profile, 'delete_configs_data': delete_configs_data, 'detail': "Profile object deleted successfully"}
+    print(f'POST REQUEST TO DELETE PROFILE FINISHED | {msg}')
+    return jsonify(msg), 200
+
+@app.route('/profile/pause', methods=['POST'])
+def pause_profile():
+
+    # Get body from the request
+    body = request.json
+
+    # Get attribute values from body
+    profile_id = body['profile_id'] 
+    pause = body['pause'] 
+    
+    # Login to MongoDB API
+    mongo_token = mongodb_login()
+    if mongo_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
+        print(f'ERROR IN LOGGING INTO MONGO API | {msg}')
+        return jsonify(msg), 500
+
+    # Make a request to MongoDB API to create a configuration object
+    url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get profile object from mongo collection"}
+        print(f'ERROR IN POST REQUEST TO DELETE PROFILE | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created config object
+    profile = res.json()
+    
+    # Delete the job from Cloud Scheduler
+    names = [f"config-{config_id}" for config_id in profile['config_ids']]
+    url = f"{CLOUD_SCHEDULER_API_URL}/job/pause-resume-multiple"
+    data = {
+        "names": names,
+        "pause": pause,
+        "project_id": SCHEDULER_PROJECT_ID,
+        "location": SCHEDULER_LOCATION,
+    }
+    res = requests.post(url, json=data)
+    
+    if not res.ok:
+        msg = {'profile_id': profile_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to pause multiple jobs from Cloud Scheduler"}
+        print(f'ERROR IN POST REQUEST TO PAUSE/RESUME PROFILE JOBS | {msg}')
+        return jsonify(msg), 500
+    
+    results = res.json()
+    state = 'paused' if pause else 'resumed'
+
+    # Make a request to MongoDB API to create a configuration object
+    url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    data = {'state': state}
+    res = requests.put(url, json=data, headers=headers)
+
+    if not res.ok:
+        msg = {'profile_id': profile_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to update profile record in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO PAUSE/RESUME PROFILE JOBS | {msg}')
+        return jsonify(msg), 500
+    
+    msg = {'profile_id': profile_id, 'ok': True, 'data': results, 'detail': "Profile jobs paused/resume successfully"}
+    print(f'POST REQUEST TO DELETE PROFILE FINISHED | {msg}')
+    return jsonify(msg), 200
 
 
 app_load_time = round(time.time() - start_time, 3)
