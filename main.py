@@ -946,19 +946,19 @@ def delete_profile(profile_id):
     
     if not res.ok:
         msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get profile object from mongo collection"}
-        print(f'ERROR IN POST REQUEST TO DELETE PROFILE | {msg}')
+        print(f'ERROR IN REQUEST TO GET PROFILE | {msg}')
         return jsonify(msg), 500
 
     # Get the created config object
     profile = res.json()
 
-    # Create multiple configs in parallel
+    # Delete multiple configs in parallel
     delete_configs_data = call_delete_config_parallel(profile['config_ids'])
 
     success = all([obj['ok'] for obj in delete_configs_data])
     if not success:
         msg = {'ok': False, 'response': delete_configs_data, 'detail': f"Failed to delete multiple config objects in parallel in mongo collection"}
-        print(f'ERROR IN POST REQUEST TO DELETE PROFILE | {msg}')
+        print(f'ERROR IN POST REQUEST TO DELETE ALL CONFIGS FOR PROFILE | {msg}')
         return jsonify(msg), 500
 
     # Delete the configuration object from MongoDB
@@ -968,11 +968,11 @@ def delete_profile(profile_id):
     
     if not res.ok:
         msg = {'profile_id': profile_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete profile object from MongoDB"}
-        print(f'ERROR IN DELETE REQUEST TO DELETE PROFILE | {msg}')
+        print(f'ERROR IN REQUEST TO DELETE PROFILE | {msg}')
         return jsonify(msg), 500
     
     msg = {'profile_id': profile_id, 'ok': True, 'data': profile, 'delete_configs_data': delete_configs_data, 'detail': "Profile object deleted successfully"}
-    print(f'POST REQUEST TO DELETE PROFILE FINISHED | {msg}')
+    print(f'DELETE PROFILE FINISHED | {msg}')
     return jsonify(msg), 200
 
 @app.route('/profile/pause', methods=['POST'])
