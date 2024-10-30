@@ -122,8 +122,12 @@ def create_user():
     # Create user classes
     url = f'{MONGO_API_URL}/octacity/classes'
     headers = {'Authorization': f'Bearer {mongo_token}'}
-    
-    data = [{'user_id': user_id, **obj} for obj in classes_base]
+
+    data = []
+    for obj in classes_base.copy():
+        del obj['_id']
+        data.append({'user_id': user_id, **obj})
+
     res = requests.post(url, headers=headers, json=data)
     
     if not res.ok:
@@ -988,14 +992,14 @@ def pause_profile():
         print(f'ERROR IN LOGGING INTO MONGO API | {msg}')
         return jsonify(msg), 500
 
-    # Make a request to MongoDB API to create a configuration object
+    # Make a request to MongoDB API to get a configuration object
     url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
     headers = {'Authorization': f'Bearer {mongo_token}'}
     res = requests.get(url, headers=headers)
     
     if not res.ok:
         msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get profile object from mongo collection"}
-        print(f'ERROR IN POST REQUEST TO DELETE PROFILE | {msg}')
+        print(f'ERROR IN REQUEST TO GET PROFILE | {msg}')
         return jsonify(msg), 500
 
     # Get the created config object
@@ -1020,7 +1024,7 @@ def pause_profile():
     results = res.json()
     state = 'paused' if pause else 'resumed'
 
-    # Make a request to MongoDB API to create a configuration object
+    # Make a request to MongoDB API to update a configuration object
     url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
     headers = {'Authorization': f'Bearer {mongo_token}'}
     data = {'state': state}
@@ -1028,11 +1032,11 @@ def pause_profile():
 
     if not res.ok:
         msg = {'profile_id': profile_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to update profile record in mongo collection"}
-        print(f'ERROR IN POST REQUEST TO PAUSE/RESUME PROFILE JOBS | {msg}')
+        print(f'ERROR IN PUT REQUEST TO UPDATE PROFILE | {msg}')
         return jsonify(msg), 500
     
     msg = {'profile_id': profile_id, 'ok': True, 'data': results, 'detail': "Profile jobs paused/resume successfully"}
-    print(f'POST REQUEST TO DELETE PROFILE FINISHED | {msg}')
+    print(f'POST REQUEST TO PAUSE/RESUME PROFILE JOBS FINISHED | {msg}')
     return jsonify(msg), 200
 
 
