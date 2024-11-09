@@ -598,6 +598,7 @@ def create_config_and_job():
     camera_id = body['camera_id']
     class_id = body['class_id']
     schedule = body['schedule'] # example: "0 15 * * *"
+    confidence = body.get('confidence', 0.5)
     time_zone = body.get('time_zone', 'America/Sao_Paulo')
     start_time = body.get('start_time', '00:00:00')
     end_time = body.get('end_time', '23:59:59')
@@ -629,6 +630,7 @@ def create_config_and_job():
     url = f"{MONGO_API_URL}/octacity/configs"
     config_body = {
         **body,
+        'confidence': confidence,
         'time_zone': time_zone,
         'start_time': start_time,
         'end_time': end_time
@@ -871,9 +873,10 @@ def post_profile():
     body = request.json
 
     # Get attribute values from body
-    user_id = body['user_id'] 
+    user_id = body['user_id']
     camera_ids = body['camera_ids']
     class_id = body['class_id']
+    confidence = body.get('confidence', 0.5)
     schedule = body['schedule'] # example: "0 15 * * *"
     time_zone = body.get('time_zone', 'America/Sao_Paulo')
     start_time = body.get('start_time', '00:00:00')
@@ -905,6 +908,7 @@ def post_profile():
     url = f"{MONGO_API_URL}/octacity/profiles"
     profile_body = {
         **body,
+        'confidence': confidence,
         'time_zone': time_zone,
         'start_time': start_time,
         'end_time': end_time,
