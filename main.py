@@ -6,9 +6,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+import base64
+from io import BytesIO
+import numpy as np
+from PIL import Image
 
 MONGO_API_URL = os.environ.get('MONGO_API_URL', 'http://localhost:5000')
 CLOUD_SCHEDULER_API_URL = os.environ.get('CLOUD_SCHEDULER_API_URL', 'http://localhost:5001')
+CLOUD_STORAGE_API_URL = os.environ.get('CLOUD_STORAGE_API_URL', 'http://localhost:5002')
+CLOUD_STORAGE_API_BUCKET_NAME = os.environ.get('CLOUD_STORAGE_API_BUCKET_NAME', 'ai-camera-system')
+
 AI_CAMERA_MANAGER_API_URL = os.environ.get('AI_CAMERA_MANAGER_API_URL', 'http://localhost:5004')
 CAMERA_VISION_AI_API_URL = os.environ.get('CAMERA_VISION_AI_API_URL', 'http://localhost:5005')
 
@@ -165,6 +172,8 @@ def create_camera_and_monitor():
     port = int(body['port'])
     subpath = body['subpath']
     attach_monitor = body.get('attach_monitor', 'false') == 'true'
+    latitude = body.get('latitude')
+    longitude = body.get('longitude')
 
     # Login to MongoDB API
     mongo_token = mongodb_login()
@@ -210,8 +219,8 @@ def create_camera_and_monitor():
     width = connection['width']
     height = connection['height']
     fps = connection['fps']
-    image = connection['image']    
-
+    image = connection['image']
+    
     # Make a request to MongoDB API to create a camera object
     url = f'{MONGO_API_URL}/octacity/cameras'
     camera = {
@@ -227,8 +236,11 @@ def create_camera_and_monitor():
         'width': width,
         'height': height,
         'url': camera_url,
+        'image_url': None,
         'monitor_id': None,
         'zm_url': None,
+        'latitude': latitude,
+        'longitude': longitude
     }
     headers = {'Authorization': f'Bearer {mongo_token}'}
     
@@ -244,6 +256,83 @@ def create_camera_and_monitor():
     camera = created['data']
     camera_id = camera['_id']
 
+    # ---
+    # Post camera image to cloud storage
+
+    bucket_name = CLOUD_STORAGE_API_BUCKET_NAME
+    file_name = f'cameras/{camera_id}/thumbnail.jpg'  # IS IT .jpg or .jpeg ??????????????
+    image_url = f'https://storage.cloud.google.com/{bucket_name}/{file_name}'
+    content_type = 'image/jpeg'
+    
+    # # Decode the base64 string
+    image_bytes = base64.b64decode(image)
+    # # Then, convert the decoded bytes back to a NumPy array
+    # image_array = np.frombuffer(image_bytes, dtype=np.uint8)
+    # # Reshape the NumPy array to its original shape (assuming original_shape is known)
+    # shape = (height, width, 3)
+    # image_array = image_array.reshape(shape)
+    # # Convert BGR to RGB
+    # image_array = image_array[..., ::-1]
+    # # Create a BytesIO object to hold the JPEG image data
+    # image_io = BytesIO()
+    # # Convert the NumPy array to an image object
+    # image_obj = Image.fromarray(image_array)
+    # # Save the image as JPEG to the BytesIO object
+    # image_obj.save(image_io, format='JPEG')
+    # # Get the jpeg encoded bytes from the BytesIO object
+    # jpeg_data = image_io.getvalue()
+
+    # Convert the byte data to an Image object using PIL
+    image_io = BytesIO(image_bytes)
+    image_obj = Image.open(image_io)
+    
+    # Convert the Image object to a NumPy array
+    image_array = np.array(image_obj)
+    
+    # At this point, image_array will have the shape (height, width, 3) or (height, width) for grayscale images.
+    # Convert grayscale to RGB if needed
+    if image_array.ndim == 2:
+        image_array = np.stack((image_array,) * 3, axis=-1)
+    
+    # Optionally, you can manipulate `image_array` here if needed
+    # e.g., flipping colors or other transformations
+    
+    # Convert the modified NumPy array back to an Image object
+    image_obj = Image.fromarray(image_array)
+    
+    # Save the image as JPEG to a new BytesIO object
+    jpeg_io = BytesIO()
+    image_obj.save(jpeg_io, format='JPEG')
+    
+    # Get the JPEG encoded bytes from the BytesIO object
+    jpeg_data = jpeg_io.getvalue()    
+
+    # Set the URL of the Flask app endpoint for uploading images
+    url = f'{CLOUD_STORAGE_API_URL}/upload-stream/{bucket_name}'
+    # url = f'{CLOUD_STORAGE_API_URL}/upload/{bucket_name}'
+    files = {'file': (file_name, jpeg_data, content_type)}
+    res = requests.post(url, files=files)
+
+    if not res.ok:
+        return jsonify({"error": f"Error to post image to cloud storage: | STATUS-CODE: {res.status_code} | MESSAGE: {res.reason} | RESPONSE: {res.text}"}), 500
+    print(f'CAMERA THUMBNAIL IMAGE POSTED TO CLOUD STORAGE | CAMERA-ID: {camera_id} | MESSAGE: {res.text}')
+    
+    # Update inference object `image_id` field in mongo collection
+    url = f'{MONGO_API_URL}/octacity/cameras/{camera_id}'
+    update = {'image_url': image_url}
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    
+    res = requests.put(url, json=update, headers=headers)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to update camera object with image_u in mongo collection'}
+        print(f'ERROR IN PUT REQUEST TO CREATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    # Updated image_id of inference object in memory
+    camera['image_url'] = image_url
+
+    # ---
     # Create and attach monitor from zoneminder
     if attach_monitor:
         
@@ -322,7 +411,7 @@ def create_camera_and_monitor():
     
         if not res.ok:
             msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to update camera object with monitor id in mongo collection'}
-            print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
+            print(f'ERROR IN PUT REQUEST TO CREATE CAMERA | {msg}')
             return jsonify(msg), 500
 
         # Get the created camera object
@@ -347,7 +436,7 @@ def update_camera_and_monitor(camera_id):
         
     # Return if not allowed field is found
     for key in body.keys():
-        if key not in ['name', 'protocol', 'address', 'port', 'subpath']:
+        if key not in ['name', 'protocol', 'address', 'port', 'subpath', 'latitude', 'longitude']:
             msg = {'ok': False, 'detail': f'Field not allowed: {key} = {body[key]}'}
             print(f'ERROR IN PUT REQUEST TO UPDATE CAMERA | {msg}')
             return jsonify(msg), 400
