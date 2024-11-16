@@ -818,16 +818,6 @@ def delete_config_and_job(config_id):
         print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
         return jsonify(msg), 500
 
-    # Delete the configuration object from MongoDB
-    mongo_url = f"{MONGO_API_URL}/octacity/configs/{config_id}"
-    headers = {'Authorization': f'Bearer {mongo_token}'}
-    res = requests.delete(mongo_url, headers=headers)
-    
-    if not res.ok:
-        msg = {'config_id': config_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete configuration object from MongoDB"}
-        print(f'ERROR IN DELETE REQUEST TO DELETE CONFIG | {msg}')
-        return jsonify(msg), 500
-
     # Delete the corresponding job from Cloud Scheduler
     # Delete the job from Cloud Scheduler
     name = f"config-{config_id}"
@@ -840,7 +830,98 @@ def delete_config_and_job(config_id):
         print(f'ERROR IN DELETE REQUEST TO DELETE CONFIG JOB | {msg}')
         return jsonify(msg), 500
 
+    # Delete the configuration object from MongoDB
+    mongo_url = f"{MONGO_API_URL}/octacity/configs/{config_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.delete(mongo_url, headers=headers)
+    
+    if not res.ok:
+        msg = {'config_id': config_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete configuration object from MongoDB"}
+        print(f'ERROR IN DELETE REQUEST TO DELETE CONFIG | {msg}')
+        return jsonify(msg), 500
+
     msg = {'config_id': config_id, 'ok': True, 'detail': "Configuration object deleted and job deleted successfully"}
+    print(f'DELETE REQUEST TO DELETE CONFIG FINISHED | {msg}')
+    return jsonify(msg), 200
+
+@app.route("/class/<string:class_id>", methods=["DELETE"])
+def delete_class(class_id):
+    # Login to MongoDB API
+    mongo_token = mongodb_login()
+    if mongo_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
+        print(f'ERROR IN POST REQUEST TO CREATE CAMERA | {msg}')
+        return jsonify(msg), 500
+
+    # Make a request to MongoDB API to get the camera object
+    url = f'{MONGO_API_URL}/octacity/classes/{class_id}'
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get class object from mongo collection'}
+        print(f'ERROR IN POST REQUEST TO GET CLASS OBJECT FROM MONGO | {msg}')
+        return jsonify(msg), 500
+
+    _class = res.json()
+    user_id = _class['user_id']
+
+    # Make a request to MongoDB API to get the profile objects
+    url = f'{MONGO_API_URL}/octacity/profiles'
+    query = {'user_id': user_id, 'class_id': class_id}
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers, params=query)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get camera profiles from mongo collection'}
+        print(f'ERROR IN POST REQUEST TO GET PROFILE OBJECTS FROM MONGO | {msg}')
+        return jsonify(msg), 500
+
+    profiles = res.json()
+    profile_ids = [profile['_id'] for profile in profiles]
+
+    # Make a request to MongoDB API to get the config objects
+    url = f'{MONGO_API_URL}/octacity/configs'
+    query = {'user_id': user_id, 'class_id': class_id}
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers, params=query)
+
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f'Failed to get camera configs from mongo collection'}
+        print(f'ERROR IN POST REQUEST TO GET CONFIG OBJECTS FROM MONGO | {msg}')
+        return jsonify(msg), 500
+
+    configs = res.json()
+    config_ids = [config['_id'] for config in configs]
+
+    # Delete multiple configs concurrently
+    delete_configs_data = call_delete_config_parallel(config_ids)
+
+    success = all([obj['ok'] for obj in delete_configs_data])
+    if not success:
+        msg = {'ok': False, 'response': delete_configs_data, 'detail': f"Failed to delete multiple config objects in parallel in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO DELETE ALL CONFIGS FOR CLASS | {msg}')
+        return jsonify(msg), 500
+    
+    delete_profiles_data = delete_profile_parallel(profile_ids, mongo_token)
+    
+    success = all([obj['ok'] for obj in delete_profiles_data])
+    if not success:
+        msg = {'ok': False, 'response': delete_profiles_data, 'detail': f"Failed to delete multiple profile objects in parallel in mongo collection"}
+        print(f'ERROR IN POST REQUEST TO DELETE ALL PROFILES FOR CLASS | {msg}')
+        return jsonify(msg), 500
+    
+    # Delete the class object from MongoDB
+    mongo_url = f"{MONGO_API_URL}/octacity/classes/{class_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.delete(mongo_url, headers=headers)
+    
+    if not res.ok:
+        msg = {'class_id': class_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete class object from MongoDB"}
+        print(f'ERROR IN DELETE REQUEST TO DELETE CLASS | {msg}')
+        return jsonify(msg), 500
+
+    msg = {'class_id': class_id, 'ok': True, 'detail': f"Class deleted successfully. Profiles deleted: {len(profiles)}. Configs deleted: {len(configs)} "}
     print(f'DELETE REQUEST TO DELETE CONFIG FINISHED | {msg}')
     return jsonify(msg), 200
 
@@ -873,6 +954,40 @@ def call_delete_config(config_id):
 
         # Convert response data to a JSON object if needed
         return response_data.get_json() if hasattr(response_data, 'get_json') else response_data
+
+def call_delete_profile(profile_id, mongo_token):
+    # Delete the profile object from MongoDB
+    mongo_url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.delete(mongo_url, headers=headers)
+
+    data = {'profile_id': profile_id, 'ok': res.ok, 'response': res.text}
+
+    if not res.ok:
+        data = {**data, 'status_code': res.status_code, 'message': res.reason, 'detail': f"Failed to delete profile object from MongoDB"}
+        print(f'ERROR IN DELETE REQUEST TO DELETE PROFILE | {data}')
+    
+    return data
+
+# Funcition to delete profiles concurrently
+def delete_profile_parallel(profile_ids, mongo_token):
+    max_workers = None
+    results = []
+    
+    # Use ThreadPoolExecutor to delete each profile in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit each item for parallel processing
+        futures = {executor.submit(call_delete_profile, item, mongo_token): item for item in profile_ids}
+        
+        # Collect results as they complete
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                results.append({"ok": False, "detail": traceback.format_exc()})
+
+    return results
 
 # Endpoint to receive list of dicts and process them in parallel
 @app.route('/configs', methods=['POST'])
@@ -1063,7 +1178,7 @@ def delete_profile(profile_id):
         msg = {'profile_id': profile_id, 'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to delete profile object from MongoDB"}
         print(f'ERROR IN REQUEST TO DELETE PROFILE | {msg}')
         return jsonify(msg), 500
-    
+        
     msg = {'profile_id': profile_id, 'ok': True, 'data': profile, 'delete_configs_data': delete_configs_data, 'detail': "Profile object deleted successfully"}
     print(f'DELETE PROFILE FINISHED | {msg}')
     return jsonify(msg), 200
