@@ -1175,10 +1175,13 @@ def post_profile():
     user_id = body['user_id']
     class_id = body['class_id']
     schedule = body['schedule'] # example: "0 15 * * *"
-    time_zone = body.get('time_zone', 'America/Sao_Paulo')
+    process = body['process']
+    # Same defaults as post(config)
+    inference_video_duration = body.get('inference_video_duration', 5)
+    confidence = body.get('confidence', 0.5)
     start_time = body.get('start_time', '00:00:00')
     end_time = body.get('end_time', '23:59:59')
-    confidence = body.get('confidence', 0.5)
+    time_zone = body.get('time_zone', 'America/Sao_Paulo')
 
     # Login to MongoDB API
     mongo_token = mongodb_login()
@@ -1207,6 +1210,7 @@ def post_profile():
     url = f"{MONGO_API_URL}/octacity/profiles"
     profile_body = {
         **body,
+        'inference_video_duration': inference_video_duration,
         'confidence': confidence,
         'time_zone': time_zone,
         'start_time': start_time,
@@ -1244,7 +1248,9 @@ def put_profile(profile_id):
         "schedule",
         "time_zone",
         "start_time",
-        "end_time"
+        "end_time",
+        "process",
+        "inference_video_duration",
     ]
     profile_update_keys = ["camera_ids"] + config_update_keys
 
