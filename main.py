@@ -687,6 +687,8 @@ def create_config_and_job():
     camera_id = body['camera_id']
     class_id = body['class_id']
     schedule = body['schedule'] # example: "0 15 * * *"
+    process = body['process']
+    inference_video_duration = body.get('inference_video_duration', 5)
     confidence = body.get('confidence', 0.5)
     time_zone = body.get('time_zone', 'America/Sao_Paulo')
     start_time = body.get('start_time', '00:00:00')
@@ -720,9 +722,10 @@ def create_config_and_job():
     config_body = {
         **body,
         'confidence': confidence,
-        'time_zone': time_zone,
+        'inference_video_duration': inference_video_duration,
         'start_time': start_time,
-        'end_time': end_time
+        'end_time': end_time,
+        'time_zone': time_zone,
     }
     headers = {'Authorization': f'Bearer {mongo_token}'}
     res = requests.post(url, json=config_body, headers=headers)
@@ -773,11 +776,13 @@ def update_config_and_job(config_id):
         'user_id',
         'camera_id',
         'class_id',
+        'confidence',
+        'process',
+        'inference_video_duration',
         'schedule',
-        'time_zone',
         'start_time',
         'end_time',
-        'confidence'
+        'time_zone',
     ]    
     
     # Get body from the request
