@@ -1204,7 +1204,7 @@ def post_profile():
         return jsonify(msg), 500
 
     config_ids = [obj['data']['_id'] for obj in configs_data]
-    state = 'resumed'
+    state = 'resumed' if len(config_ids) else 'paused'
     
     # Make a request to MongoDB API to create a configuration object
     url = f"{MONGO_API_URL}/octacity/profiles"
@@ -1253,8 +1253,8 @@ def put_profile(profile_id):
         "inference_video_duration",
     ]
     profile_update_keys = ["camera_ids"] + config_update_keys
-
     keys_not_allowed = [key for key in body if key not in profile_update_keys + ['camera_ids']]
+
     if len(keys_not_allowed):
         msg = {'ok': False, 'detail': f"Keys not allowed: {keys_not_allowed}"}
         print(f'ERROR IN PUT REQUEST TO UPDATE PROFILE | {msg}')
@@ -1291,7 +1291,7 @@ def put_profile(profile_id):
     camera_ids_keep = [camera_id for camera_id in profile['camera_ids'] if camera_id in profile_updated['camera_ids']]
     config_ids_keep = [config_id for config_id, camera_id in list(zip(profile['config_ids'], profile['camera_ids'])) if camera_id in profile_updated['camera_ids']]
     
-    if len(camera_ids_keep) and len(config_updates):
+    if len(config_ids_keep) and len(config_updates):
         items = [{'updates': config_updates, 'config_id': config_id} for config_id in config_ids_keep]
         
         # Update existing configs in parallel
@@ -1307,15 +1307,18 @@ def put_profile(profile_id):
     camera_ids_out = []
     config_ids_in = []
     config_ids_out = []
-    
-    if body.get('camera_ids'):
+    delete_configs_data = None
+    post_configs_data = None
+
+    # Create or remove configs
+    if 'camera_ids' in body and body['camera_ids'] != profile['camera_ids']:
         camera_ids_out = [camera_id for camera_id in profile['camera_ids'] if camera_id not in body['camera_ids']]
         camera_ids_in = [camera_id for camera_id in body['camera_ids'] if camera_id not in profile['camera_ids']]
 
         config_ids_out = [config_id for config_id, camera_id in list(zip(profile['config_ids'], profile['camera_ids'])) if camera_id not in body['camera_ids']]
-        config_ids_in = []
+        config_ids_in = [] # empty because the new configs are yet to be created
 
-        if len(camera_ids_out):
+        if len(config_ids_out):
             # Delete missing configs in parallel
             delete_configs_data = call_delete_config_parallel(config_ids_out)
 
@@ -1364,9 +1367,14 @@ def put_profile(profile_id):
 
         camera_ids_concat = camera_ids_keep + camera_ids_in
         config_ids_concat = config_ids_keep + config_ids_in
+
+        # Reorder 'config_ids' value to correspond to inputted cameras order
         config_ids = [config_ids_concat[camera_ids_concat.index(camera_id)] for camera_id in body['camera_ids']]
-        
         profile_updates['config_ids'] = config_ids
+
+        # Pause the profile schedule if all cameras/configs are removed
+        if len(config_ids) == 0:
+            profile_updates['state'] = 'paused'    
 
     # state = 'resumed'
     
@@ -1383,7 +1391,7 @@ def put_profile(profile_id):
     # Get the created config object
     data = res.json()
 
-    msg = {'profile_id': profile_id, 'ok': True, 'data': data, 'config_ids_keep': len(config_ids_keep), 'config_ids_in': len(config_ids_in), 'config_ids_out': len(config_ids_out), 'detail': "Schedule profile updated successfully"}
+    msg = {'profile_id': profile_id, 'ok': True, 'data': data, 'config_ids_keep': len(config_ids_keep), 'config_ids_in': len(config_ids_in), 'config_ids_out': len(config_ids_out), 'detail': "Schedule profile updated successfully", 'post_configs_data': post_configs_data, 'delete_configs_data': delete_configs_data}
     print(f'POST REQUEST TO UPDATE PROFILE SUCCESSFUL | {msg}')
     return jsonify(msg), 201
 
