@@ -1498,6 +1498,93 @@ def pause_profile():
     return jsonify(msg), 200
 
 
+# ---
+# RUN PROFILE
+
+# Function to run a job
+def call_run_job(config_id):
+    url = f'{CLOUD_SCHEDULER_API_URL}/job/run'
+
+    # Example payload data for running a job
+    payload = {
+        'project_id': SCHEDULER_PROJECT_ID,
+        'location': SCHEDULER_LOCATION,
+        'name': f'config-{config_id}'
+    }
+
+    try:
+        res = requests.post(url, json=payload)
+        res.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+        return {'config_id': config_id, 'ok': True, 'response': res.text, 'status_code': res.status_code}
+    except requests.exceptions.RequestException as e:
+        return {'config_id': config_id, 'ok': False, 'error': str(e), 'detail': 'Failed to run config job', 'traceback': traceback.format_exc() }
+    except Exception as e:
+         return {'config_id': config_id, 'ok': False, 'error': str(e), 'detail': 'Failed to run config job', 'traceback': traceback.format_exc()}
+
+
+# Function to run configs concurrently
+def run_config_parallel(config_ids):
+    max_workers = None
+    results = []
+    
+    # Use ThreadPoolExecutor to delete each profile in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit each item for parallel processing
+        futures = {executor.submit(call_run_job, item): item for item in config_ids}
+        
+        # Collect results as they complete
+        for future in futures.keys():
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                results.append({"ok": False, "detail": traceback.format_exc()})
+
+    return results
+
+@app.route('/profile/execute', methods=['POST'])
+def execute_profile():
+    # Get body from the request
+    body = request.json
+
+    # Get attribute values from body
+    profile_id = body['profile_id'] 
+    
+    # Login to MongoDB API
+    mongo_token = mongodb_login()
+    if mongo_token is None:
+        msg = {'ok': False, 'detail': f"Failed to login to MongoDB API"}
+        print(f'ERROR IN LOGGING INTO MONGO API | {msg}')
+        return jsonify(msg), 500
+
+    # Make a request to MongoDB API to get a configuration object
+    url = f"{MONGO_API_URL}/octacity/profiles/{profile_id}"
+    headers = {'Authorization': f'Bearer {mongo_token}'}
+    res = requests.get(url, headers=headers)
+    
+    if not res.ok:
+        msg = {'ok': res.ok, 'status_code': res.status_code, 'message': res.reason, 'response': res.text, 'detail': f"Failed to get profile object from mongo collection"}
+        print(f'ERROR IN REQUEST TO GET PROFILE | {msg}')
+        return jsonify(msg), 500
+
+    # Get the created config object
+    profile = res.json()
+    
+    # Execute the job from Cloud Scheduler
+    config_ids = profile['config_ids']
+    results = run_config_parallel(config_ids)
+    
+    success = all([obj['ok'] for obj in results])
+    if not success:
+        config_status = {config_id: obj['ok'] for config_id, obj in zip(profile['configs'], results)}
+        msg = {'profile_id': profile_id, 'config_status': config_status, 'ok': False, 'response': results, 'detail': f"Failed to run multiple jobs from Cloud Scheduler"}
+        print(f'ERROR IN POST REQUEST TO EXECUTE PROFILE JOBS | {msg}')
+        return jsonify(msg), 500
+
+    msg = {'profile_id': profile_id, 'ok': True, 'data': results, 'detail': "Profile jobs executed successfully"}
+    print(f'POST REQUEST TO EXECUTE PROFILE JOBS FINISHED | {msg}')
+    return jsonify(msg), 200
+
 app_load_time = round(time.time() - start_time, 3)
 print(f'\nFLASK APPLICATION STARTED... | APP-LOAD-TIME: {app_load_time} s')
 
